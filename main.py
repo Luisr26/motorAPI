@@ -38,17 +38,27 @@ class EstadoMotor(BaseModel):
     direccion: Literal["adelante", "atras", "stop"]
 
 
+class Medicion(BaseModel):
+    """Lo que muestra el LCD del medidor: voltaje, corriente y potencia."""
+
+    voltaje_v: float
+    corriente_ma: float
+    potencia_w: float
+
+
 class EstadoCompleto(EstadoMotor):
-    """Lo que ve la web: el estado más la información de conexión del ESP32."""
+    """Lo que ve la web: el estado, la conexión del ESP32 y la última medición."""
 
     conectado: bool
     segundos_desde_contacto: Optional[float]
+    medicion: Optional[Medicion]
 
 
 # Estado en memoria. El lock evita que dos peticiones a la vez lo dejen a medias.
 _lock = threading.Lock()
 _estado = EstadoMotor(velocidad=0, direccion="stop")
 _ultimo_contacto: Optional[float] = None  # time.monotonic() del último GET del ESP32
+_medicion: Optional[Medicion] = None      # última medición que mandó el ESP32
 
 INDEX_HTML = Path(__file__).parent / "static" / "index.html"
 
@@ -59,11 +69,22 @@ def pagina_web() -> FileResponse:
 
 
 @app.get("/motor/", response_model=EstadoMotor)
-def leer_motor() -> EstadoMotor:
-    """Lo usa el ESP32. Devuelve el estado deseado y anota la hora del contacto."""
-    global _ultimo_contacto
+def leer_motor(
+    v: Optional[float] = None,
+    i: Optional[float] = None,
+    p: Optional[float] = None,
+) -> EstadoMotor:
+    """
+    Lo usa el ESP32. Devuelve el estado deseado y anota la hora del contacto.
+
+    Si el ESP32 manda ?v=..&i=..&p=.. (voltaje V, corriente mA, potencia W),
+    se guardan para mostrarlos en la web. Así no hace falta una petición extra.
+    """
+    global _ultimo_contacto, _medicion
     with _lock:
         _ultimo_contacto = time.monotonic()
+        if v is not None and i is not None and p is not None:
+            _medicion = Medicion(voltaje_v=v, corriente_ma=i, potencia_w=p)
         return _estado
 
 
@@ -85,4 +106,5 @@ def leer_estado() -> EstadoCompleto:
             **_estado.model_dump(),
             conectado=segundos is not None and segundos < SEGUNDOS_CONECTADO,
             segundos_desde_contacto=None if segundos is None else round(segundos, 1),
+            medicion=_medicion,
         )
