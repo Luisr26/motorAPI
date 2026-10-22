@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control de motor</title>
+  <style>
+    :root {
+      --bg: #f4f5f7; --card: #ffffff; --text: #1c1f24; --muted: #6b7280;
+      --accent: #2563eb; --ok: #16a34a; --bad: #9ca3af; --stop: #dc2626;
+      --warn-bg: #fef3c7; --warn-text: #92400e; --border: #e5e7eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318; --card: #1b1e25; --text: #e8eaed; --muted: #9aa0a6;
+        --accent: #60a5fa; --ok: #4ade80; --bad: #6b7280; --stop: #ef4444;
+        --warn-bg: #3b2f0b; --warn-text: #fcd34d; --border: #2c313a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      display: flex; justify-content: center; padding: 16px;
+    }
+    main { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 16px; }
+    h1 { font-size: 1.4rem; margin: 4px 0; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 18px; }
+    .conexion { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+    .punto { width: 14px; height: 14px; border-radius: 50%; background: var(--bad); flex: none; }
+    .conexion.on .punto { background: var(--ok); box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent); }
+    .detalle { color: var(--muted); font-size: .85rem; margin-top: 4px; }
+    .aviso { background: var(--warn-bg); color: var(--warn-text); border-radius: 10px; padding: 10px 14px; font-size: .9rem; }
+    .aviso[hidden] { display: none; }
+    label { display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 12px; }
+    #valor { font-variant-numeric: tabular-nums; font-size: 1.6rem; color: var(--accent); }
+    input[type=range] { width: 100%; height: 36px; accent-color: var(--accent); }
+    .direcciones { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    button {
+      font: inherit; font-weight: 700; border-radius: 12px; border: 2px solid var(--border);
+      background: var(--card); color: var(--text); padding: 18px 8px; cursor: pointer;
+      touch-action: manipulation;
+    }
+    button.activo { border-color: var(--accent); background: var(--accent); color: #fff; }
+    #stop {
+      width: 100%; background: var(--stop); border-color: var(--stop); color: #fff;
+      font-size: 1.5rem; padding: 26px 8px; letter-spacing: .05em;
+    }
+    #stop:active { filter: brightness(.85); }
+    .actual { text-align: center; color: var(--muted); font-size: .95rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Control de motor DC</h1>
+
+  <div class="card">
+    <div id="conexion" class="conexion"><span class="punto"></span><span id="conexionTexto">Consultando…</span></div>
+    <div id="conexionDetalle" class="detalle"></div>
+  </div>
+
+  <div id="aviso" class="aviso" hidden>Despertando servidor… la primera petición puede tardar unos 50 s.</div>
+
+  <div class="card">
+    <label for="velocidad">Velocidad <span id="valor">0%</span></label>
+    <input id="velocidad" type="range" min="0" max="100" step="1" value="0">
+  </div>
+
+  <div class="direcciones">
+    <button id="adelante" type="button">▲ Adelante</button>
+    <button id="atras" type="button">▼ Atrás</button>
+  </div>
+
+  <button id="stop" type="button">DETENER</button>
+
+  <div id="actual" class="actual">Motor: stop</div>
+</main>
+
+<script>
+  // URLs relativas: funcionan igual en http://localhost:8000 y en Render.
+  const $ = (id) => document.getElementById(id);
+  const estado = { velocidad: 0, direccion: "stop" };
+  let arrastrando = false;
+  let temporizador = null;
+
+  // fetch que muestra "despertando servidor" si la respuesta tarda más de 3 s.
+  async function pedir(url, opciones = {}) {
+    const aviso = setTimeout(() => { $("aviso").hidden = false; }, 3000);
+    try {
+      const r = await fetch(url, { cache: "no-store", ...opciones });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return await r.json();
+    } finally {
+      clearTimeout(aviso);
+      $("aviso").hidden = true;
+    }
+  }
+
+  function pintar() {
+    $("valor").textContent = estado.velocidad + "%";
+    $("adelante").classList.toggle("activo", estado.direccion === "adelante");
+    $("atras").classList.toggle("activo", estado.direccion === "atras");
+    $("actual").textContent = estado.direccion === "stop"
+      ? "Motor: stop"
+      : `Motor: ${estado.direccion} ${estado.velocidad}%`;
+  }
+
+  async function enviar() {
+    try {
+      const r = await pedir("motor/", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(estado),
+      });
+      Object.assign(estado, r);
+      pintar();
+    } catch (e) {
+      $("actual").textContent = "Error al enviar: " + e.message;
+    }
+  }
+
+  // Slider: actualiza el número al instante, pero envía el PUT 300 ms después
+  // del último movimiento (debounce) para no saturar la API.
+  $("velocidad").addEventListener("input", (ev) => {
+    estado.velocidad = Number(ev.target.value);
+    pintar();
+    clearTimeout(temporizador);
+    temporizador = setTimeout(enviar, 300);
+  });
+  $("velocidad").addEventListener("pointerdown", () => { arrastrando = true; });
+  window.addEventListener("pointerup", () => { arrastrando = false; });
+
+  $("adelante").addEventListener("click", () => { estado.direccion = "adelante"; pintar(); enviar(); });
+  $("atras").addEventListener("click", () => { estado.direccion = "atras"; pintar(); enviar(); });
+  // DETENER envía de inmediato (sin debounce). Conserva la velocidad del slider
+  // para que al volver a pulsar Adelante/Atrás arranque con ese valor.
+  $("stop").addEventListener("click", () => {
+    clearTimeout(temporizador);
+    estado.direccion = "stop";
+    pintar();
+    enviar();
+  });
+
+  // Cada 2 s pregunta si el ESP32 sigue conectado.
+  async function revisarEstado(primeraVez) {
+    try {
+      const r = await pedir("estado/");
+      $("conexion").classList.toggle("on", r.conectado);
+      $("conexionTexto").textContent = r.conectado ? "ESP32 conectado" : "ESP32 desconectado";
+      $("conexionDetalle").textContent = r.segundos_desde_contacto === null
+        ? "El ESP32 aún no se ha comunicado desde que arrancó el servidor."
+        : `Último contacto hace ${r.segundos_desde_contacto} s`;
+      if (primeraVez) {
+        estado.velocidad = r.velocidad;
+        estado.direccion = r.direccion;
+        $("velocidad").value = r.velocidad;
+        pintar();
+      }
+    } catch (e) {
+      $("conexion").classList.remove("on");
+      $("conexionTexto").textContent = "Sin respuesta del servidor";
+      $("conexionDetalle").textContent = e.message;
+    }
+  }
+
+  async function bucle() {
+    await revisarEstado(true);
+    setInterval(() => { if (!arrastrando) revisarEstado(false); }, 2000);
+  }
+  bucle();
+</script>
+</body>
+</html>

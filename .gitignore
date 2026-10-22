@@ -1,0 +1,20 @@
+# Entorno virtual de Python (cada quien crea el suyo)
+.venv/
+venv/
+
+# Archivos compilados de Python
+__pycache__/
+*.pyc
+
+# Variables de entorno / secretos (nunca a GitHub)
+.env
+*.env
+
+# Sketches de Arduino: tienen las credenciales del WiFi
+*.ino
+
+# Editores y sistema
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
